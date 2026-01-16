@@ -132,11 +132,11 @@ resource "aws_security_group" "public_sg" {
   }
 
   # Allow HTTP 
-  ingress { 
-    description = "HTTP from Internet" 
-    from_port = 80
-    to_port = 80
-    protocol = "tcp"
+  ingress {
+    description = "HTTP from Internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -173,7 +173,7 @@ yum install -y nginx
 systemctl start nginx
 systemctl enable nginx
 EOF
-                
+
   tags = {
     Name = "public-ec2-instance"
   }
