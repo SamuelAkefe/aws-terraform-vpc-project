@@ -122,6 +122,7 @@ data "aws_ami" "amazon_linux" {
 
 #==================================
 resource "aws_s3_bucket" "app_bucket" {
+  #trivy:ignore:AVD-AWS-0132
   bucket_prefix = "my-flask-app-uploads-" # Generates a unique name
   force_destroy = true                    # Allows deleting bucket even if it has files (for learning)
 
@@ -131,6 +132,18 @@ resource "aws_s3_bucket" "app_bucket" {
 }
 
 # Block Public Access (Security Best Practice)
+#Enable Free Encryption (AES256)
+resource "aws_s3_bucket_server_side_encryption_configuration" "app_bucket_crypto" {
+  bucket = aws_s3_bucket.app_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+
 resource "aws_s3_bucket_public_access_block" "app_bucket_acl" {
   bucket = aws_s3_bucket.app_bucket.id
 
