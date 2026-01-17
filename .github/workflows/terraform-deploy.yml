@@ -17,10 +17,8 @@ jobs:
         steps:
             #1. Checkout the code
             - name: Checkout
-              uses: hashicorp/setup-terraform@v2
-              with:
-                terraform_version: 1.5.0
-            
+              uses: actions/checkout@v3
+        
             # =================================
             - name: Debug - What files are here?
               run: |
