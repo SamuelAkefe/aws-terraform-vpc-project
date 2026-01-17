@@ -20,6 +20,9 @@ jobs:
               uses: hashicorp/setup-terraform@v2
               with:
                 terraform_version: 1.5.0
+            
+            - name: Debug - What files are here?
+              run: ls -R
 
             #2. Setup Terraform
             - name: Setup Terraform
