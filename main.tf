@@ -133,10 +133,10 @@ resource "aws_s3_bucket" "app_bucket" {
 
 # Block Public Access (Security Best Practice)
 #Enable Free Encryption (AES256)
+#trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket_server_side_encryption_configuration" "app_bucket_crypto" {
   bucket = aws_s3_bucket.app_bucket.id
 
-  #trivy:ignore:AVD-AWS-0132
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
