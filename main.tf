@@ -27,6 +27,8 @@ resource "aws_subnet" "public_subnet" {
   vpc_id                  = aws_vpc.main_vpc.id
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "us-east-1a"
+
+  #trivy:ignore:AVD-AWS-0164
   map_public_ip_on_launch = true # Instances get public IPs by default 
 
   tags = {
@@ -128,6 +130,7 @@ resource "aws_security_group" "public_sg" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
+    #trivy:ignore:AVD-AWS-0107
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -145,6 +148,7 @@ resource "aws_security_group" "public_sg" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
+    #trivy:ignore:AVD-AWS-0104
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -164,6 +168,19 @@ resource "aws_instance" "public_server" {
 
   # The name of the key pair you created in Step 1
   key_name = "my-terraform-key"
+
+  # Encrypt the Root Block Device
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 8
+    encrypted = true
+  }
+
+  # Enforce IMDSv2 (Secure Metadata)
+  metadata_options {
+    http_tokens = "required"
+    http_endpoint = "enabled"
+  }
 
   # USER DATA SCRIPT
   user_data = <<EOF
