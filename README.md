@@ -282,3 +282,173 @@ To prevent ongoing charges for the NAT Gateway and EC2 instances, the infrastruc
 Bash
 terraform destroy
 
+
+6. CI/CD Pipeline Automation (backend.tf & GitHub Actions)
+Updated January 17, 2026
+
+To transition from manual local deployment to automated cloud deployment, we implemented a CI/CD pipeline using GitHub Actions and AWS S3 for remote state management.
+
+6.1 Remote State Configuration (backend.tf)
+We moved the terraform.tfstate file from the local laptop to an S3 bucket. This ensures the GitHub Actions runner can access the current state of the infrastructure. We also added a DynamoDB table to prevent concurrent writes (State Locking).
+
+File: backend.tf
+
+Terraform
+
+terraform {
+  backend "s3" {
+    # Replace with your actual S3 bucket name
+    bucket         = "terraform-state-locking-YOUR-NAME"
+    key            = "prod/terraform.tfstate"
+    region         = "us-east-1"
+    
+    # Locking mechanism to prevent corrupting state during simultaneous runs
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
+}
+6.2 GitHub Actions Workflow (.github/workflows/terraform-deploy.yml)
+This file defines the automation rules. Every time code is pushed to the main branch, GitHub spins up a secure container, validates the code, and applies changes to AWS.
+
+File: .github/workflows/terraform-deploy.yml
+
+YAML
+
+name: "Terraform Infrastructure Deployment"
+
+on:
+  push:
+    branches:
+      - main
+    pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color -input=false
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+
+
+
+Understanding the YAML File (The "Robot Instructions")
+Think of the YAML file as a recipe card you hand to a robot (GitHub Actions). Here is exactly what each block tells the robot to do:
+
+1. The Trigger (on:)
+YAML
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+What it does: This tells the robot when to wake up.
+
+Translation: "Wake up and run this script whenever someone pushes code to the main branch OR opens a Pull Request."
+
+2. The Job Environment (jobs:)
+YAML
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+What it does: This selects the computer to run on.
+
+Translation: "Rent a fresh Linux server (Ubuntu) from GitHub's cloud for a few minutes to run these tasks."
+
+3. Step 1: Get the Code (Checkout)
+YAML
+
+- name: Checkout
+  uses: actions/checkout@v3
+Translation: "Log into my repository and download all the files (main.tf, backend.tf, etc.) onto this Ubuntu server."
+
+4. Step 2: Install Tools (Setup Terraform)
+YAML
+
+- name: Setup Terraform
+  uses: hashicorp/setup-terraform@v2
+Translation: "This is a plain Linux server; it doesn't have Terraform installed. Please download and install Terraform version 1.5.0 so we can use it."
+
+5. Step 3: Login & Connect (Terraform Init)
+YAML
+
+- name: Terraform Init
+  run: terraform init
+  env:
+    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    ...
+Translation: "Run terraform init. I am giving you my secret AWS username and password (which I hid in GitHub Secrets) so you can talk to my S3 bucket and download the state file."
+
+6. Step 4: Quality Control (Format & Validate)
+YAML
+
+- name: Terraform Format
+  run: terraform fmt -check
+Translation: "Check if the code looks messy (bad indentation). If it is ugly, stop right here and fail the build."
+
+Translation (Validate): "Check for syntax errors (like typos or missing brackets)."
+
+7. Step 5: The "Dry Run" (Terraform Plan)
+YAML
+
+if: github.event_name == 'pull_request'
+run: terraform plan
+The Logic: This step ONLY runs if you are doing a Pull Request (testing code).
+
+Translation: "Pretend to run the code and tell me what would happen, but don't actually change anything in AWS yet."
+
+8. Step 6: The "Big Red Button" (Terraform Apply)
+YAML
+
+if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+run: terraform apply -auto-approve
+The Logic: This step ONLY runs if you pushed directly to the main branch.
+
+Translation: "This is the real deal. Run terraform apply. Use -auto-approve because there is no human here to type 'yes'. Build the infrastructure now!"
+
