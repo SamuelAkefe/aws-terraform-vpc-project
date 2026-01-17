@@ -26,13 +26,25 @@ jobs:
                 ls -R
             # =================================
 
-            #2. Setup Terraform
+            #2.  Security Scan (IaC)
+            - name: Run Trivy vulnerability scanner in IaC mode
+              uses: aquasecurity/trivy-action@master
+              with:
+                scan-type: 'config'
+                hide-progress: false
+                format: 'table'
+                exit-code: '1'
+                ignore-unfixed: true
+                severity: 'CRITICAL,HIGH'
+
+
+            #3. Setup Terraform
             - name: Setup Terraform
               uses: hashicorp/setup-terraform@v2
               with:
                 terraform_version: 1.5.0
 
-            #3. Initialize Terraform (Download providers & backend)
+            #4. Initialize Terraform (Download providers & backend)
             - name: Terraform init
               id: init
               run: terraform init
@@ -41,17 +53,17 @@ jobs:
                 AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
                 AWS_DEFAULT_REGION: us-east-1
 
-            # 4. Check Formatting (Fail only if code is ugly )
+            #5. Check Formatting (Fail only if code is ugly )
             - name: Terraform Format
               id: fmt
               run: terraform fmt -check
 
-            # 5. Validate Syntax
+            # 6. Validate Syntax
             - name: Terraform Validate
               id: validate
               run: terraform validate
 
-            # 6. Terraform Plan (Show us what will happen)
+            # 7. Terraform Plan (Show us what will happen)
             - name: Terraform Plan
               id: plan
               if: github.event_name == 'pull_request'
@@ -62,7 +74,7 @@ jobs:
                 AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
                 AWS_DEFAULT_REGION: us-east-1
 
-            # 7. Terraform Apply (only runs on push to main)
+            # 8. Terraform Apply (only runs on push to main)
             - name: Terraform Apply
               if: github.ref == 'refs/heads/main' && github.event_name == 'push'
               run: terraform apply -auto-approve -input=false

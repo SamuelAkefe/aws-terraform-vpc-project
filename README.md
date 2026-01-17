@@ -452,3 +452,121 @@ The Logic: This step ONLY runs if you pushed directly to the main branch.
 
 Translation: "This is the real deal. Run terraform apply. Use -auto-approve because there is no human here to type 'yes'. Build the infrastructure now!"
 
+To transition from manual local deployment to a professional DevOps workflow, we implemented a Continuous Integration/Continuous Deployment (CI/CD) pipeline using GitHub Actions. This ensures that infrastructure changes are automatically validated and deployed whenever code is pushed to the repository.
+
+6.1 Remote State Configuration (backend.tf)
+We migrated the Terraform state file (terraform.tfstate) from the local machine to AWS S3 to allow the GitHub Actions runner to access the infrastructure's current state. We also implemented State Locking using AWS DynamoDB to prevent concurrent execution errors.
+
+File: backend.tf
+
+Terraform
+
+terraform {
+  backend "s3" {
+    bucket         = "terraform-state-locking-<YOUR-NAME>"
+    key            = "prod/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
+}
+6.2 The Automation Workflow (terraform-deploy.yml)
+We created a YAML configuration file in .github/workflows/ to define the deployment logic. The pipeline consists of the following automated steps:
+
+Checkout: Downloads the code from the repository.
+
+Setup: Installs Terraform v1.5.0 on the runner.
+
+Init: Connects to the AWS S3 backend using GitHub Secrets.
+
+Format & Validate: Checks the code for style and syntax errors.
+
+Plan: Runs a "dry run" (on Pull Requests only).
+
+Apply: Deploys the changes to AWS (on Push to main only).
+
+Final Workflow Configuration:
+
+YAML
+
+name: "Terraform Infrastructure Deployment"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout the code (CRITICAL: Must use actions/checkout)
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # 2. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      # 3. Initialize Terraform
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+
+      # 4. Terraform Format & Validate
+      - name: Terraform Format
+        run: terraform fmt -check
+      - name: Terraform Validate
+        run: terraform validate
+
+      # 5. Terraform Apply (Only on push to main)
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve -input=false
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+7. Troubleshooting & Lessons Learned (Updated)
+Throughout the project, we encountered and resolved several technical challenges, ranging from Linux scripting to CI/CD configuration.
+
+User Data Syntax Error:
+
+Issue: The Nginx installation script failed silently on the server.
+
+Cause: Indentation/whitespace before #!/bin/bash prevented the kernel from recognizing the script.
+
+Fix: Used <<EOF (no dash) and ensured the Shebang line was flush-left.
+
+"Connection Refused" (Port 80):
+
+Issue: The server was reachable via Ping, but HTTP requests failed.
+
+Cause: The user_data script failed to run, so Nginx was never installed.
+
+Fix: Verified logs via /var/log/cloud-init-output.log and fixed the script syntax.
+
+CI/CD Error: "No configuration files":
+
+Issue: The GitHub Action failed immediately with Error: No configuration files.
+
+Cause 1: The local .tf files had not been pushed to the remote repository.
+
+Cause 2: The YAML workflow used hashicorp/setup-terraform in the Checkout step instead of actions/checkout. This meant the runner installed Terraform but never downloaded the source code.
+
+Fix: Updated the uses directive to actions/checkout@v3 and verified file presence with a debug ls -R step.
+
+8. Conclusion
+This project successfully demonstrated the implementation of a 2-Tier Architecture on AWS using Infrastructure as Code (IaC). By automating the deployment with Terraform and GitHub Actions, we achieved a reliable, repeatable, and secure infrastructure that supports scalability and rapid iteratio
