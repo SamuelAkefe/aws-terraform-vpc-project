@@ -568,5 +568,59 @@ Cause 2: The YAML workflow used hashicorp/setup-terraform in the Checkout step i
 
 Fix: Updated the uses directive to actions/checkout@v3 and verified file presence with a debug ls -R step.
 
-8. Conclusion
-This project successfully demonstrated the implementation of a 2-Tier Architecture on AWS using Infrastructure as Code (IaC). By automating the deployment with Terraform and GitHub Actions, we achieved a reliable, repeatable, and secure infrastructure that supports scalability and rapid iteratio
+9. Security & Compliance (DevSecOps)
+Updated January 17, 2026
+
+To ensure the infrastructure adheres to security best practices, we integrated Trivy, a comprehensive security scanner, into the CI/CD pipeline. This implements a "Shift Left" strategy, detecting vulnerabilities in the code before resources are deployed.
+
+9.1 CI/CD Integration
+We added the aquasecurity/trivy-action step to the GitHub Actions workflow. The scanner analyzes the Terraform configuration (scan-type: 'config') for common risks such as unencrypted storage or open firewalls.
+
+Workflow Configuration:
+
+YAML
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fails the build if critical risks are found
+9.2 Remediation & Risk Acceptance
+During the scan, Trivy identified several security risks. We resolved them using a mix of code fixes and documented risk acceptance:
+
+Encryption (Fixed): We enabled EBS volume encryption (encrypted = true) to protect data at rest.
+
+Metadata Security (Fixed): We enforced IMDSv2 (http_tokens = "required") to protect the server against Server-Side Request Forgery (SSRF) attacks.
+
+Open Ports (Accepted): Trivy flagged the open SSH port (0.0.0.0/0) as a critical risk. Since this is a demonstration environment requiring public access, we explicitly documented this exception using the ignore comment:
+
+Terraform
+
+#trivy:ignore:AVD-AWS-0107
+cidr_blocks = ["0.0.0.0/0"]
+
+10. Application Logic: Flask & S3 Integration
+Added January 17, 2026
+
+To demonstrate a dynamic cloud application, we replaced the static Nginx web server with a custom Python Flask web application. This application allows end-users to upload images via a web interface, which are then securely stored in an AWS S3 Bucket rather than the local server storage.
+
+10.1 The Architecture
+This setup utilizes the "Stateless" cloud design principle. The EC2 instance processes the request, but the data (images) is offloaded to S3. This ensures that even if the server is terminated or replaced, the user data remains safe in the storage layer.
+
+10.2 Dynamic Infrastructure (User Data)
+We utilized the Terraform user_data attribute to inject the application code into the server at boot time. This approach ensures that the application is always configured with the correct environment variables without manual intervention.
+
+Key Technical Feature: Dynamic Variable Injection Terraform dynamically inserts the S3 bucket ID into the Python code before the server launches.
+
+Python
+
+# Terraform injects the resource ID during the 'Apply' phase
+BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}' 
+10.3 IAM Roles vs. Access Keys
+To secure the communication between the EC2 instance and the S3 bucket, we implemented an IAM Role (ec2_s3_access_role).
+
+Old Way (Insecure): Hardcoding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY inside the application script.
+
+Our Way (Secure): The EC2 instance assumes a role that grants temporary, rotating permissions (s3:PutObject) only for the specific bucket. The Python boto3 library detects this role automatically, eliminating the need for long-term credentials.
+

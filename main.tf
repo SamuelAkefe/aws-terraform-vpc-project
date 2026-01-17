@@ -117,6 +117,74 @@ data "aws_ami" "amazon_linux" {
     values = ["al2023-ami-2023.*-x86_64"]
   }
 }
+# =================================
+# S3 Bucket for Image Uploads
+
+#==================================
+resource "aws_s3_bucket" "app_bucket" {
+  bucket_prefix = "my-flask-app-uploads-" # Generates a unique name
+  force_destroy = true                    # Allows deleting bucket even if it has files (for learning)
+
+  tags = {
+    Name = "Flask-Upload-Bucket"
+  }
+}
+
+# Block Public Access (Security Best Practice)
+resource "aws_s3_bucket_public_access_block" "app_bucket_acl" {
+  bucket = aws_s3_bucket.app_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# ==============================
+# IAM Role (The "Passport" for EC2)
+# 1. Create the Role
+resource "aws_iam_role" "ec2_s3_role" {
+  name = "ec2_s3_access_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# 2. Grant Permission to Upload to S3 
+resource "aws_iam_role_policy" "s3_upload_policy" {
+  name = "s3_upload_policy"
+  role = aws_iam_role.ec2_s3_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:ListBucket"
+      ]
+      Resource = [
+        aws_s3_bucket.app_bucket.arn,
+        "${aws_s3_bucket.app_bucket.arn}/*"
+      ]
+    }]
+  })
+}
+
+# 3. Create the Instance Profile (To attach role to EC2)
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "ec2_s3_profile"
+  role = aws_iam_role.ec2_s3_role.name
+}
 
 # 11. Create a Security Group (Firewall)
 resource "aws_security_group" "public_sg" {
@@ -169,6 +237,9 @@ resource "aws_instance" "public_server" {
   # The name of the key pair you created in Step 1
   key_name = "my-terraform-key"
 
+  # Attach the IAM Role
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+
   # Encrypt the Root Block Device
   root_block_device {
     volume_type = "gp3"
@@ -182,17 +253,55 @@ resource "aws_instance" "public_server" {
     http_endpoint = "enabled"
   }
 
+  # NEW: Python Flask App with S3 Upload
   # USER DATA SCRIPT
   user_data = <<EOF
 #!/bin/bash 
+# 1. Install Updates & Python
 yum update -y
-yum install -y nginx
-systemctl start nginx
-systemctl enable nginx
-EOF
+yum install -y python3-pip
+pip3 install flask boto3
 
+# 2. Create the Flask App
+cat <<EOT >> /home/ec2-user/app.py
+import os
+import boto3
+from flask import Flask, request, render_template_string
+
+app = Flask(__name__)
+BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}' # Terraform injects the bucket name here
+
+# HTML Template
+HTML = """
+<!doctype html>
+<title>Upload new File</title>
+<h1>Upload Image to S3</h1>
+<form method=post enctype=multipart/form-data>
+  <input type=file name=file>
+  <input type=submit value=Upload>
+</form>
+"""
+
+@app.route('/', methods=['GET', 'POST'])
+def upload_file():
+  if request.method == 'POST':
+    file = request.files['file']
+    if file:
+      # Upload to S3 using IAM Role (No keys needed !)
+      s3 = boto3.client('s3')
+      s3.upload_fileobj(file, BUCKET_NAME, file.filename)
+      return f"<h1>Success! Uploaded {file.filename} to S3 bucket: {BUCKET_NAME}</h1>"
+  return HTML
+
+if __name__ == '__main__':
+  app.run(host='0.0.0.0', port=80)
+EOT
+
+# 3. Run the App (as root, so it can bind to port 80)
+nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 & 
+EOF
   tags = {
-    Name = "public-ec2-instance"
+    Name = "flask-uplosd-server"
   }
 }
 
