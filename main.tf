@@ -24,9 +24,9 @@ resource "aws_internet_gateway" "igw" {
 
 # 3. Create the Public Subnet 
 resource "aws_subnet" "public_subnet" {
-  vpc_id                  = aws_vpc.main_vpc.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "us-east-1a"
+  vpc_id            = aws_vpc.main_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
 
   #trivy:ignore:AVD-AWS-0164
   map_public_ip_on_launch = true # Instances get public IPs by default 
@@ -145,9 +145,9 @@ resource "aws_security_group" "public_sg" {
 
   # Allow all outbound traffic (so the server can download updates) 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
     #trivy:ignore:AVD-AWS-0104
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -173,12 +173,12 @@ resource "aws_instance" "public_server" {
   root_block_device {
     volume_type = "gp3"
     volume_size = 8
-    encrypted = true
+    encrypted   = true
   }
 
   # Enforce IMDSv2 (Secure Metadata)
   metadata_options {
-    http_tokens = "required"
+    http_tokens   = "required"
     http_endpoint = "enabled"
   }
 
