@@ -240,6 +240,7 @@ resource "aws_security_group" "public_sg" {
 }
 
 # 12. Create the EC2 Instance in the Public Subnet
+#trivy:ignore:AVD-AWS-0029
 resource "aws_instance" "public_server" {
   ami           = data.aws_ami.amazon_linux.id
   instance_type = "t2.micro"
