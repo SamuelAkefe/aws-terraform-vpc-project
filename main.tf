@@ -244,78 +244,129 @@ resource "aws_instance" "public_server" {
   ami           = data.aws_ami.amazon_linux.id
   instance_type = "t2.micro"
   subnet_id     = aws_subnet.public_subnet.id
-
-  # Attach the Security Group we just created 
   vpc_security_group_ids = [aws_security_group.public_sg.id]
+  key_name      = "my-terraform-key"
 
-  # The name of the key pair you created in Step 1
-  key_name = "my-terraform-key"
-
-  # Attach the IAM Role
+  # Attach IAM Role
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
-  # Encrypt the Root Block Device
+  # Security (Trivy)
   root_block_device {
     volume_type = "gp3"
     volume_size = 8
     encrypted   = true
   }
-
-  # Enforce IMDSv2 (Secure Metadata)
   metadata_options {
     http_tokens   = "required"
     http_endpoint = "enabled"
   }
 
-  # NEW: Python Flask App with S3 Upload
-  # USER DATA SCRIPT
+  # NEW USER DATA: Python Flask + PostgreSQL Setup
   user_data = <<EOF
-#!/bin/bash 
-# 1. Install Updates & Python
+#!/bin/bash
+# 1. Install Python, Postgres Server, and Build Tools
 yum update -y
-yum install -y python3-pip
-pip3 install flask boto3
+yum install -y python3-pip postgresql15-server postgresql-devel gcc python3-devel
 
-# 2. Create the Flask App
+# 2. Initialize & Start PostgreSQL
+postgresql-setup --initdb
+systemctl enable postgresql
+systemctl start postgresql
+
+# 3. Configure Database (Create User, DB, and Table)
+# Note: In production, never put passwords in plain text! Use AWS Secrets Manager.
+sudo -u postgres psql -c "CREATE USER flaskuser WITH PASSWORD 'flaskpass';"
+sudo -u postgres psql -c "CREATE DATABASE flaskdb OWNER flaskuser;"
+sudo -u postgres psql -d flaskdb -c "CREATE TABLE images (id SERIAL PRIMARY KEY, filename TEXT, bucket TEXT, s3_url TEXT, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+
+# 4. Install Python Libraries (Flask, Boto3, Psycopg2)
+pip3 install flask boto3 psycopg2-binary
+
+# 5. Create the Flask App
 cat <<EOT >> /home/ec2-user/app.py
-import os
 import boto3
-from flask import Flask, request, render_template_string
+import psycopg2
+from flask import Flask, request
 
 app = Flask(__name__)
-BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}' # Terraform injects the bucket name here
+BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}'
+DB_HOST = "localhost"
+DB_NAME = "flaskdb"
+DB_USER = "flaskuser"
+DB_PASS = "flaskpass"
 
-# HTML Template
-HTML = """
-<!doctype html>
-<title>Upload new File</title>
-<h1>Upload Image to S3</h1>
-<form method=post enctype=multipart/form-data>
-  <input type=file name=file>
-  <input type=submit value=Upload>
-</form>
-"""
+def get_db_connection():
+    conn = psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS)
+    return conn
 
 @app.route('/', methods=['GET', 'POST'])
-def upload_file():
-  if request.method == 'POST':
-    file = request.files['file']
-    if file:
-      # Upload to S3 using IAM Role (No keys needed !)
-      s3 = boto3.client('s3')
-      s3.upload_fileobj(file, BUCKET_NAME, file.filename)
-      return f"<h1>Success! Uploaded {file.filename} to S3 bucket: {BUCKET_NAME}</h1>"
-  return HTML
+def index():
+    status_msg = ""
+    
+    # Handle File Upload
+    if request.method == 'POST':
+        file = request.files['file']
+        if file:
+            # 1. Upload to S3
+            s3 = boto3.client('s3')
+            s3.upload_fileobj(file, BUCKET_NAME, file.filename)
+            s3_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file.filename}"
+            
+            # 2. Save Metadata to PostgreSQL
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("INSERT INTO images (filename, bucket, s3_url) VALUES (%s, %s, %s)",
+                        (file.filename, BUCKET_NAME, s3_url))
+            conn.commit()
+            cur.close()
+            conn.close()
+            status_msg = f"<p style='color:green'>Success! Uploaded <b>{file.filename}</b> and saved to DB.</p>"
+
+    # Fetch History from DB to display
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, filename, uploaded_at FROM images ORDER BY id DESC;")
+    images = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    # Generate HTML Table
+    rows = ""
+    for img in images:
+        rows += f"<tr><td>{img[0]}</td><td>{img[1]}</td><td>{img[2]}</td></tr>"
+
+    return f"""
+    <!doctype html>
+    <style>
+        body {{ font-family: sans-serif; text-align: center; padding: 20px; }}
+        table {{ margin: 0 auto; border-collapse: collapse; width: 50%; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; }}
+        th {{ background-color: #f2f2f2; }}
+    </style>
+    <h1>Cloud Image Uploader (S3 + Postgres)</h1>
+    {{status_msg}}
+    <form method="post" enctype="multipart/form-data">
+        <input type="file" name="file" required>
+        <input type="submit" value="Upload">
+    </form>
+    <br><hr><br>
+    <h2>Database Records</h2>
+    <table>
+        <tr><th>ID</th><th>Filename</th><th>Time Uploaded</th></tr>
+        {{rows}}
+    </table>
+    """
 
 if __name__ == '__main__':
-  app.run(host='0.0.0.0', port=80)
+    app.run(host='0.0.0.0', port=80)
 EOT
 
-# 3. Run the App (as root, so it can bind to port 80)
-nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 & 
+# 6. Run the App
+nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &
 EOF
+
   tags = {
-    Name = "flask-uplosd-server"
+    Name = "flask-postgres-server"
   }
 }
 
