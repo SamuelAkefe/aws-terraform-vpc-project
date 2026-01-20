@@ -1,36 +1,32 @@
-provider "aws" {
-  region = "us-east-1"
-}
-
 # 1. VPC
 resource "aws_vpc" "main_vpc" {
   cidr_block       = "10.0.0.0/16"
   instance_tenancy = "default"
-  tags             = { Name = "main-vpc" }
+  tags             = { Name = "${var.project_name}-vpc" }
 }
 
 # 2. Internet Gateway
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main_vpc.id
-  tags   = { Name = "main-igw" }
+  tags   = { Name = "${var.project_name}-igw" }
 }
 
 # 3. Public Subnet
 resource "aws_subnet" "public_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
+  availability_zone = "${var.aws_region}a"
   #trivy:ignore:AVD-AWS-0164
   map_public_ip_on_launch = true
-  tags                    = { Name = "public-subnet-1" }
+  tags                    = { Name = "${var.project_name}-public-subnet" }
 }
 
 # 4. Private Subnet
 resource "aws_subnet" "private_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = "10.0.2.0/24"
-  availability_zone = "us-east-1a"
-  tags              = { Name = "private-subnet-1" }
+  availability_zone = "${var.aws_region}a"
+  tags              = { Name = "${var.project_name}-private-subnet" }
 }
 
 # 5. Route Table
@@ -40,7 +36,7 @@ resource "aws_route_table" "public_rt" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  tags = { Name = "public-route-table" }
+  tags = { Name = "${var.project_name}-public-rt" }
 }
 
 resource "aws_route_table_association" "public_assoc" {
@@ -51,9 +47,9 @@ resource "aws_route_table_association" "public_assoc" {
 # 6. S3 Bucket
 #trivy:ignore:AVD-AWS-0132
 resource "aws_s3_bucket" "app_bucket" {
-  bucket_prefix = "flask-app-db-uploads-"
+  bucket_prefix = "${var.project_name}-db-uploads-"
   force_destroy = true
-  tags          = { Name = "Flask-Upload-Bucket" }
+  tags          = { Name = "${var.project_name}-bucket" }
 }
 
 #trivy:ignore:AVD-AWS-0132
@@ -76,7 +72,7 @@ resource "aws_s3_bucket_public_access_block" "app_bucket_acl" {
 
 # 7. IAM Role
 resource "aws_iam_role" "ec2_s3_role" {
-  name = "ec2_s3_access_role_v5"
+  name = "${var.project_name}-role-v1"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -104,13 +100,13 @@ resource "aws_iam_role_policy" "s3_upload_policy" {
 }
 
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "ec2_s3_profile_v5"
+  name = "${var.project_name}-profile-v1"
   role = aws_iam_role.ec2_s3_role.name
 }
 
 # 8. Security Group
 resource "aws_security_group" "public_sg" {
-  name        = "flask_db_sg_v2"
+  name        = "${var.project_name}-sg"
   description = "Allow HTTP and SSH"
   vpc_id      = aws_vpc.main_vpc.id
 
@@ -150,17 +146,15 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# ... (inside main.tf) ...
-
 #trivy:ignore:AVD-AWS-0029
 resource "aws_instance" "public_server" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = var.instance_type
   subnet_id              = aws_subnet.public_subnet.id
   vpc_security_group_ids = [aws_security_group.public_sg.id]
-  key_name               = "my-terraform-key"
+  key_name               = var.key_name
 
-  # FORCE REPLACEMENT ON SCRIPT CHANGE (Add this line!)
+  # FORCE REPLACEMENT ON SCRIPT CHANGE
   user_data_replace_on_change = true
 
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
@@ -183,18 +177,25 @@ resource "aws_instance" "public_server" {
 
     # 2. Init & Config Postgres
     postgresql-setup --initdb
-    # FIX: Allow password auth
+    # Change auth method to md5 so password login works
     sed -i 's/ident/md5/g' /var/lib/pgsql/data/pg_hba.conf
     systemctl enable postgresql
     systemctl start postgresql
 
-    # 3. Create DB and User
+    # 3. Create DB, User, AND TABLE
+    # --- FIX 1: Added the CREATE TABLE command here ---
     sudo -u postgres psql -c "CREATE USER flaskuser WITH PASSWORD 'flaskpass';"
     sudo -u postgres psql -c "CREATE DATABASE flaskdb OWNER flaskuser;"
-    sudo -u postgres psql -d flaskdb -c "CREATE TABLE images (id SERIAL PRIMARY KEY, filename TEXT, bucket TEXT, s3_url TEXT, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
-
-    # 4. Install Python Libs (sudo for global install)
-    sudo pip3 install flask boto3 psycopg2-binary
+    
+    # Create the table so the app doesn't crash
+    sudo -u postgres psql -d flaskdb -c "CREATE TABLE images (id SERIAL PRIMARY KEY, filename TEXT NOT NULL, bucket TEXT NOT NULL, s3_url TEXT NOT NULL, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    
+    # Grant permissions
+    sudo -u postgres psql -d flaskdb -c "GRANT ALL PRIVILEGES ON TABLE images TO flaskuser;"
+    sudo -u postgres psql -d flaskdb -c "GRANT USAGE, SELECT ON SEQUENCE images_id_seq TO flaskuser;"
+    
+    # 4. Install Python Libs
+    pip3 install flask boto3 psycopg2-binary
 
     # 5. Create Python App
     cat <<EOT >> /home/ec2-user/app.py
@@ -203,7 +204,8 @@ resource "aws_instance" "public_server" {
     from flask import Flask, request
 
     app = Flask(__name__)
-    BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}'
+    # Terraform will inject the bucket ID here
+    BUCKET_NAME = '${aws_s3_bucket.app_bucket.id}' 
     DB_HOST = "localhost"
     DB_NAME = "flaskdb"
     DB_USER = "flaskuser"
@@ -222,7 +224,10 @@ resource "aws_instance" "public_server" {
                 try:
                     s3 = boto3.client('s3')
                     s3.upload_fileobj(file, BUCKET_NAME, file.filename)
-                    s3_url = f"https://{aws_s3_bucket.app_bucket.id}.s3.amazonaws.com/{file.filename}"
+                    
+                    # --- FIX 2: Use the Python variable BUCKET_NAME ---
+                    # Old broken code: ...{aws_s3_bucket.app_bucket.id}...
+                    s3_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file.filename}"
                     
                     conn = get_db_connection()
                     cur = conn.cursor()
@@ -232,7 +237,7 @@ resource "aws_instance" "public_server" {
                     conn.close()
                     status_msg = f"<p style='color:green'>Success! Uploaded <b>{file.filename}</b> and saved to DB.</p>"
                 except Exception as e:
-                    status_msg = f"<p style='color:red'>Error: {str(e)}</p>"
+                    status_msg = f"<p style='color:red'>Error: {{str(e)}}</p>"
 
         try:
             conn = get_db_connection()
@@ -241,12 +246,13 @@ resource "aws_instance" "public_server" {
             images = cur.fetchall()
             cur.close()
             conn.close()
-        except:
-            images = []
+        except Exception as e:
+            # --- FIX 3: Show database errors instead of hiding them ---
+            return f"<h1>DATABASE ERROR:</h1> <p>{{str(e)}}</p>"
 
         rows = ""
         for img in images:
-            rows += f"<tr><td>{img[0]}</td><td>{img[1]}</td><td>{img[2]}</td></tr>"
+            rows += f"<tr><td>{{img[0]}}</td><td>{{img[1]}}</td><td>{{img[2]}}</td></tr>"
 
         return f"""
         <!doctype html>
@@ -274,15 +280,11 @@ resource "aws_instance" "public_server" {
         app.run(host='0.0.0.0', port=80)
     EOT
 
-    # 6. Run App
+    # 6. Run App (Using sudo to ensure it has Port 80 permissions)
     nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &
   EOF
-
+  
   tags = {
-    Name = "flask-postgres-server"
+    Name = "${var.project_name}-server"
   }
-}
-
-output "public_ip" {
-  value = aws_instance.public_server.public_ip
 }
