@@ -6,7 +6,7 @@ provider "aws" {
 resource "aws_vpc" "main_vpc" {
   cidr_block       = "10.0.0.0/16"
   instance_tenancy = "default"
-  tags = { Name = "main-vpc" }
+  tags             = { Name = "main-vpc" }
 }
 
 # 2. Internet Gateway
@@ -17,9 +17,9 @@ resource "aws_internet_gateway" "igw" {
 
 # 3. Public Subnet
 resource "aws_subnet" "public_subnet" {
-  vpc_id                  = aws_vpc.main_vpc.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "us-east-1a"
+  vpc_id            = aws_vpc.main_vpc.id
+  cidr_block        = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
   #trivy:ignore:AVD-AWS-0164
   map_public_ip_on_launch = true
   tags                    = { Name = "public-subnet-1" }
@@ -67,7 +67,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "app_bucket_crypto
 }
 
 resource "aws_s3_bucket_public_access_block" "app_bucket_acl" {
-  bucket = aws_s3_bucket.app_bucket.id
+  bucket                  = aws_s3_bucket.app_bucket.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -76,12 +76,12 @@ resource "aws_s3_bucket_public_access_block" "app_bucket_acl" {
 
 # 7. IAM Role
 resource "aws_iam_role" "ec2_s3_role" {
-  name = "ec2_s3_access_role_v5" 
+  name = "ec2_s3_access_role_v5"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
     }]
   })
@@ -94,7 +94,7 @@ resource "aws_iam_role_policy" "s3_upload_policy" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Action = [ "s3:PutObject", "s3:GetObject", "s3:ListBucket" ]
+      Action = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
       Resource = [
         aws_s3_bucket.app_bucket.arn,
         "${aws_s3_bucket.app_bucket.arn}/*"
@@ -132,9 +132,9 @@ resource "aws_security_group" "public_sg" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
     #trivy:ignore:AVD-AWS-0104
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -152,11 +152,11 @@ data "aws_ami" "amazon_linux" {
 
 #trivy:ignore:AVD-AWS-0029
 resource "aws_instance" "public_server" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t2.micro"
-  subnet_id     = aws_subnet.public_subnet.id
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.public_subnet.id
   vpc_security_group_ids = [aws_security_group.public_sg.id]
-  key_name      = "my-terraform-key"
+  key_name               = "my-terraform-key"
 
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
