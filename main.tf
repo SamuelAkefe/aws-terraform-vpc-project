@@ -154,14 +154,14 @@ data "aws_ami" "amazon_linux" {
 
 #trivy:ignore:AVD-AWS-0029
 resource "aws_instance" "public_server" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t2.micro"
-  subnet_id     = aws_subnet.public_subnet.id
+  ami                    = data.aws_ami.amazon_linux.id
+  instance_type          = "t2.micro"
+  subnet_id              = aws_subnet.public_subnet.id
   vpc_security_group_ids = [aws_security_group.public_sg.id]
-  key_name      = "my-terraform-key"
+  key_name               = "my-terraform-key"
 
   # FORCE REPLACEMENT ON SCRIPT CHANGE (Add this line!)
-  user_data_replace_on_change = true 
+  user_data_replace_on_change = true
 
   iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
 
