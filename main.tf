@@ -269,19 +269,23 @@ resource "aws_instance" "public_server" {
 yum update -y
 yum install -y python3-pip postgresql15-server postgresql-devel gcc python3-devel
 
-# 2. Initialize & Start PostgreSQL
+# 2. Initialize PostgreSQL
 postgresql-setup --initdb
+
+# FIX: Allow Password Authentication (Solves the 500 Error)
+sed -i 's/ident/md5/g' /var/lib/pgsql/data/pg_hba.conf
+
 systemctl enable postgresql
 systemctl start postgresql
 
-# 3. Configure Database (Create User, DB, and Table)
-# Note: In production, never put passwords in plain text! Use AWS Secrets Manager.
+# 3. Configure Database
+# Note: In production, use AWS Secrets Manager for passwords.
 sudo -u postgres psql -c "CREATE USER flaskuser WITH PASSWORD 'flaskpass';"
 sudo -u postgres psql -c "CREATE DATABASE flaskdb OWNER flaskuser;"
 sudo -u postgres psql -d flaskdb -c "CREATE TABLE images (id SERIAL PRIMARY KEY, filename TEXT, bucket TEXT, s3_url TEXT, uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
 
-# 4. Install Python Libraries (Flask, Boto3, Psycopg2)
-pip3 install flask boto3 psycopg2-binary
+# 4. Install Python Libraries
+sudo pip3 install flask boto3 psycopg2-binary
 
 # 5. Create the Flask App
 cat <<EOT >> /home/ec2-user/app.py
@@ -304,34 +308,38 @@ def get_db_connection():
 def index():
     status_msg = ""
     
-    # Handle File Upload
     if request.method == 'POST':
         file = request.files['file']
         if file:
-            # 1. Upload to S3
-            s3 = boto3.client('s3')
-            s3.upload_fileobj(file, BUCKET_NAME, file.filename)
-            s3_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file.filename}"
-            
-            # 2. Save Metadata to PostgreSQL
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("INSERT INTO images (filename, bucket, s3_url) VALUES (%s, %s, %s)",
-                        (file.filename, BUCKET_NAME, s3_url))
-            conn.commit()
-            cur.close()
-            conn.close()
-            status_msg = f"<p style='color:green'>Success! Uploaded <b>{file.filename}</b> and saved to DB.</p>"
+            try:
+                # 1. Upload to S3
+                s3 = boto3.client('s3')
+                s3.upload_fileobj(file, BUCKET_NAME, file.filename)
+                s3_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{file.filename}"
+                
+                # 2. Save Metadata to PostgreSQL
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("INSERT INTO images (filename, bucket, s3_url) VALUES (%s, %s, %s)",
+                            (file.filename, BUCKET_NAME, s3_url))
+                conn.commit()
+                cur.close()
+                conn.close()
+                status_msg = f"<p style='color:green'>Success! Uploaded <b>{file.filename}</b> and saved to DB.</p>"
+            except Exception as e:
+                # FIX: Show the actual error in RED
+                status_msg = f"<p style='color:red'>Error: {str(e)}</p>"
 
-    # Fetch History from DB to display
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, filename, uploaded_at FROM images ORDER BY id DESC;")
-    images = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, filename, uploaded_at FROM images ORDER BY id DESC;")
+        images = cur.fetchall()
+        cur.close()
+        conn.close()
+    except:
+        images = []
 
-    # Generate HTML Table
     rows = ""
     for img in images:
         rows += f"<tr><td>{img[0]}</td><td>{img[1]}</td><td>{img[2]}</td></tr>"
@@ -340,9 +348,10 @@ def index():
     <!doctype html>
     <style>
         body {{ font-family: sans-serif; text-align: center; padding: 20px; }}
-        table {{ margin: 0 auto; border-collapse: collapse; width: 50%; }}
+        table {{ margin: 0 auto; border-collapse: collapse; width: 60%; }}
         th, td {{ border: 1px solid #ddd; padding: 8px; }}
         th {{ background-color: #f2f2f2; }}
+        .error {{ color: red; }}
     </style>
     <h1>Cloud Image Uploader (S3 + Postgres)</h1>
     {{status_msg}}
@@ -365,11 +374,6 @@ EOT
 # 6. Run the App
 nohup python3 /home/ec2-user/app.py > /home/ec2-user/app.log 2>&1 &
 EOF
-
-  tags = {
-    Name = "flask-postgres-server"
-  }
-}
 
 # 13. Output the Public IP
 # This tells Terraform to print the server's IP address after it finishes 
